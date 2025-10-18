@@ -1,15 +1,26 @@
-Chętnie przygotuję dla Ciebie kompletny, działający kod oraz szczegółową notatkę teoretyczną, która podsumowuje kluczowe mechanizmy **obsługi przerwań za pomocą FreeRTOS Queues** na ESP32.
+# Obsługa Przerwań za pomocą FreeRTOS Queues na ESP32
 
-Poniższy kod zakłada, że używasz płytki deweloperskiej ESP32 (lub ESP32-S3) w środowisku **ESP-IDF**, gdzie:
+## 📋 Spis treści
+- [Wymagania sprzętowe](#wymagania-sprzętowe)
+- [Implementacja](#implementacja)
+- [Teoria i koncepcje](#teoria-i-koncepcje)
+- [Cykl działania](#cykl-działania)
 
-  * **Przycisk** jest podłączony do pinu **GPIO\_5** (Input).
-  * **Dioda LED** (np. wbudowana lub zewnętrzna) jest podłączona do pinu **GPIO\_2** (Output).
+---
 
------
+## Wymagania sprzętowe
 
-## 📝 Kompletny Kod Przykładu (ESP-IDF)
+### Konfiguracja pinów
+- **Przycisk:** GPIO_5 (Input z Pull-Up)
+- **Dioda LED:** GPIO_2 (Output)
+- **Platforma:** ESP32 / ESP32-S3
+- **Środowisko:** ESP-IDF
 
-Ten program demonstruje, jak bezpiecznie obsłużyć wciśnięcie przycisku, używając przerwania sprzętowego i przekazując zdarzenie do dedykowanego zadania FreeRTOS za pomocą kolejki.
+---
+
+## Implementacja
+
+### Kompletny kod przykładu
 
 ```c
 #include "freertos/FreeRTOS.h"
@@ -110,20 +121,23 @@ void app_main(void)
 }
 ```
 
------
+---
 
-## 🧠 Teoria Przykładu: Przerwanie w Systemie RTOS (Notatka)
+## Teoria i koncepcje
 
-### A. Cel Mechanizmu ISR + Queue
+### Cel mechanizmu ISR + Queue
 
-W programowaniu systemów czasu rzeczywistego (RTOS), takich jak FreeRTOS, priorytetem jest **determinism** (przewidywalność) i **szybkość reakcji**.
+W systemach czasu rzeczywistego (RTOS) priorytetem jest **determinizm** (przewidywalność) i **szybkość reakcji**.
 
-1.  **Problem:** Funkcje obsługi przerwań (**ISR**) muszą być wykonane w **mikrosekundach**. Jeśli ISR wykonuje skomplikowaną logikę (np. alokację pamięci, skomunikowanie się przez Wi-Fi, długą pętlę), blokuje to procesor, uniemożliwiając obsługę innych, potencjalnie krytycznych, przerwań.
-2.  **Rozwiązanie:** Wprowadzamy rozdzielenie obowiązków:
-      * **ISR (Sprzęt):** Wykonuje minimalną pracę — odbiera sygnał i natychmiast **przekazuje wiadomość** o zdarzeniu.
-      * **Task (Oprogramowanie):** Czeka na wiadomość i wykonuje **całą logikę** (która może trwać milisekundy lub dłużej) w bezpiecznym kontekście zadania.
+#### Problem
+Funkcje obsługi przerwań (**ISR**) muszą być wykonane w **mikrosekundach**. Jeśli ISR wykonuje skomplikowaną logikę (np. alokację pamięci, komunikację Wi-Fi, długą pętlę), blokuje to procesor, uniemożliwiając obsługę innych, potencjalnie krytycznych, przerwań.
 
-### B. Kluczowe Komponenty FreeRTOS
+#### Rozwiązanie
+Rozdzielenie obowiązków:
+- **ISR (Sprzęt):** Wykonuje minimalną pracę — odbiera sygnał i natychmiast **przekazuje wiadomość** o zdarzeniu.
+- **Task (Oprogramowanie):** Czeka na wiadomość i wykonuje **całą logikę** (która może trwać milisekundy lub dłużej) w bezpiecznym kontekście zadania.
+
+### Kluczowe komponenty FreeRTOS
 
 | Komponent | Funkcja w Przykładzie | Kontekst Użycia |
 | :--- | :--- | :--- |
@@ -131,19 +145,70 @@ W programowaniu systemów czasu rzeczywistego (RTOS), takich jak FreeRTOS, prior
 | **Kolejka (`gpio_evt_queue`)** | Mechanizm komunikacji (bufor FIFO). Umożliwia **asynchroniczną komunikację** między ISR a Taskiem. | **Współdzielony** (ISR wysyła, Task odbiera). |
 | **Task (`button_event_task`)** | Zadanie (wątek) RTOS. Używa `xQueueReceive` do czekania na dane. Gdy dane nadejdą, **Task budzi się** i wykonuje długą, bezpieczną logikę. | **Kontekst Tasku** (normalny, bezpieczny). |
 
-### C. Funkcje Bezpieczne dla Przerwań
+### Funkcje bezpieczne dla przerwań
 
 FreeRTOS ściśle rozróżnia funkcje:
 
-1.  **`xQueueSend()` / `xQueueReceive()`:** Standardowe funkcje. Mogą wywoływać przełączanie Tasków, są używane tylko **w kontekście Tasków**.
-2.  **`xQueueSendFromISR()` / `xQueueReceiveFromISR()`:** Specjalne funkcje. **Są zoptymalizowane do pracy w ISR** – nie wywołują przełączania kontekstu w trakcie działania, a jedynie flagują potrzebę ewentualnego przełączenia **po powrocie z przerwania**.
+1. **`xQueueSend()` / `xQueueReceive()`:** 
+   - Standardowe funkcje
+   - Mogą wywoływać przełączanie Tasków
+   - Używane tylko **w kontekście Tasków**
 
-### D. Cykl Działania (Wciśnięcie Przycisku)
+2. **`xQueueSendFromISR()` / `xQueueReceiveFromISR()`:** 
+   - Specjalne funkcje
+   - **Zoptymalizowane do pracy w ISR**
+   - Nie wywołują przełączania kontekstu w trakcie działania
+   - Flagują potrzebę ewentualnego przełączenia **po powrocie z przerwania**
 
-1.  **Inicjalizacja:** Zadanie `button_event_task` startuje i natychmiast blokuje się na instrukcji **`xQueueReceive(..., portMAX_DELAY)`**. Procesor nie marnuje na nie cykli.
-2.  **Akcja:** Użytkownik naciska przycisk. Następuje zbocze opadające na GPIO\_5.
-3.  **Wstrzymanie:** Procesor wstrzymuje bieżącą pracę (Task) i skacze do **`gpio_isr_handler`**.
-4.  **Szybkie Przekazanie:** ISR wywołuje **`xQueueSendFromISR`**, co umieszcza numer `5` w kolejce.
-5.  **Obudzenie:** Jądro RTOS zauważa, że wysłanie danych do kolejki odblokowało Task (`button_event_task`), który ma wyższy priorytet (lub ten sam, ale jest gotowy).
-6.  **Powrót i Przełączenie:** ISR kończy działanie. Jądro RTOS **przełącza kontekst** z powrotem do Tasku `button_event_task`.
-7.  **Wykonanie Logiki:** Task budzi się, funkcja `xQueueReceive` zwraca `true`, a Task wykonuje bezpieczną operację **`gpio_set_level(LED_GPIO, led_state)`**, odwracając stan diody.
+### Atrybut IRAM_ATTR
+
+- Zapewnia umieszczenie funkcji ISR w wewnętrznej pamięci RAM
+- Gwarantuje **szybki dostęp** i wykonanie
+- Niezbędny dla stabilności i wydajności przerwań
+
+---
+
+## Cykl działania
+
+### Sekwencja obsługi wciśnięcia przycisku
+
+1. **Inicjalizacja:** 
+   - Zadanie `button_event_task` startuje
+   - Blokuje się na instrukcji `xQueueReceive(..., portMAX_DELAY)`
+   - Procesor nie marnuje cykli na to zadanie
+
+2. **Akcja:** 
+   - Użytkownik naciska przycisk
+   - Następuje zbocze opadające na GPIO_5
+
+3. **Wstrzymanie:** 
+   - Procesor wstrzymuje bieżącą pracę (Task)
+   - Skacze do `gpio_isr_handler`
+
+4. **Szybkie przekazanie:** 
+   - ISR wywołuje `xQueueSendFromISR`
+   - Umieszcza numer `5` w kolejce
+
+5. **Obudzenie:** 
+   - Jądro RTOS zauważa, że wysłanie danych odblokowało Task
+   - `button_event_task` staje się gotowy do wykonania
+
+6. **Powrót i przełączenie:** 
+   - ISR kończy działanie
+   - Jądro RTOS **przełącza kontekst** do Tasku `button_event_task`
+
+7. **Wykonanie logiki:** 
+   - Task budzi się
+   - Funkcja `xQueueReceive` zwraca `true`
+   - Wykonywana jest bezpieczna operacja `gpio_set_level(LED_GPIO, led_state)`
+   - Stan diody LED ulega odwróceniu
+
+---
+
+## 🔑 Kluczowe wnioski
+
+- **Minimalna logika w ISR:** Tylko przekazanie danych do kolejki
+- **Asynchroniczna komunikacja:** Queue jako bufor między ISR a Task
+- **Bezpieczeństwo kontekstu:** Używanie funkcji `FromISR` w przerwaniach
+- **Efektywność energetyczna:** Task śpi do czasu otrzymania zdarzenia
+- **Skalowalność:** Łatwe dodanie obsługi wielu przycisków/źródeł przerwań
